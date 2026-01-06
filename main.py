@@ -2,81 +2,84 @@ import requests
 import os
 import glob
 
-# --- CONFIGURAÇÕES ---
-CAMINHO_PASTA = r'C:\Caminho\Para\Suas\Listas' # Use 'r' antes das aspas no Windows
-ARQUIVO_SAIDA = 'lista_consolidada_online.m3u8'
+# --- CONFIGURATIONS ---
+# Use 'r' before quotes on Windows (e.g., r'C:\Users\Name\Desktop\Playlists')
+SOURCE_FOLDER = r'C:\Path\To\Your\Lists' 
+OUTPUT_FILE = 'final_online_list.m3u8'
 TIMEOUT = 5 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
 
-def validar_iptv():
-    canais_unicos = {} # Dicionário para evitar duplicatas de (Nome + URL)
+def validate_iptv():
+    unique_channels = {} # Dictionary to avoid duplicates (Name + URL)
     
-    # Ajusta o caminho para buscar os arquivos
-    padrao_busca = os.path.join(CAMINHO_PASTA, "*.m3u*")
-    arquivos_m3u = glob.glob(padrao_busca)
+    # Define the pattern to search for .m3u and .m3u8 files
+    search_pattern = os.path.join(SOURCE_FOLDER, "*.m3u*")
+    m3u_files = glob.glob(search_pattern)
     
-    if not arquivos_m3u:
-        print(f"Nenhum arquivo encontrado em: {CAMINHO_PASTA}")
+    if not m3u_files:
+        print(f"No files found in: {SOURCE_FOLDER}")
         return
 
-    print(f"--- Encontrados {len(arquivos_m3u)} arquivos para processar ---")
+    print(f"--- Found {len(m3u_files)} files to process ---")
 
-    for arquivo in arquivos_m3u:
-        # Ignora o arquivo de saída se ele estiver na mesma pasta
-        if ARQUIVO_SAIDA in arquivo:
+    for file_path in m3u_files:
+        # Ignore the output file if it's in the same folder
+        if OUTPUT_FILE in file_path:
             continue
             
-        print(f"\nLendo: {os.path.basename(arquivo)}")
+        print(f"\nReading: {os.path.basename(file_path)}")
         try:
-            with open(arquivo, 'r', encoding='utf-8', errors='ignore') as f:
-                linhas = f.readlines()
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
         except Exception as e:
-            print(f"Erro ao ler arquivo: {e}")
+            print(f"Error reading file: {e}")
             continue
 
-        nome_metadata = ""
-        for linha in linhas:
-            linha = linha.strip()
+        metadata_name = ""
+        for line in lines:
+            line = line.strip()
             
-            if linha.startswith('#EXTINF'):
-                nome_metadata = linha
+            # Capture the #EXTINF line (channel name and info)
+            if line.startswith('#EXTINF'):
+                metadata_name = line
             
-            elif linha.startswith('http'):
-                url = linha
-                # Cria uma chave única baseada no nome limpo e na URL
-                # Isso evita nomes iguais com links diferentes e vice-versa
-                chave_duplicata = f"{nome_metadata}_{url}"
+            # Capture the URL line
+            elif line.startswith('http'):
+                url = line
+                # Create a unique key based on Name + URL
+                # This prevents duplicate entries even if they come from different files
+                duplicate_key = f"{metadata_name}_{url}"
                 
-                if chave_duplicata not in canais_unicos:
+                if duplicate_key not in unique_channels:
                     try:
-                        # Verifica se o link responde
+                        # Perform a HEAD request to check status without downloading the stream
                         response = requests.head(url, timeout=TIMEOUT, headers=HEADERS, allow_redirects=True)
                         
                         if response.status_code == 200:
                             print(f"  [ON]  {url}")
-                            canais_unicos[chave_duplicata] = (nome_metadata, url)
+                            unique_channels[duplicate_key] = (metadata_name, url)
                         else:
                             print(f"  [OFF] Status {response.status_code}")
                             
                     except Exception:
-                        print(f"  [OFF] Timeout/Erro")
+                        print(f"  [OFF] Timeout/Error")
                 else:
-                    print(f"  [SKIP] Canal/Link já processado")
+                    print(f"  [SKIP] Channel/Link already processed")
 
-    # Salva o arquivo final
-    caminho_final = os.path.join(CAMINHO_PASTA, ARQUIVO_SAIDA)
-    with open(caminho_final, 'w', encoding='utf-8') as f:
+    # Save the consolidated results
+    final_path = os.path.join(SOURCE_FOLDER, OUTPUT_FILE)
+    with open(final_path, 'w', encoding='utf-8') as f:
         f.write("#EXTM3U\n")
-        for nome, url in canais_unicos.values():
-            f.write(f"{nome}\n{url}\n")
+        for name, url in unique_channels.values():
+            f.write(f"{name}\n{url}\n")
     
     print(f"\n" + "="*40)
-    print(f"PROCESSO CONCLUÍDO!")
-    print(f"Canais Online e Únicos: {len(canais_unicos)}")
-    print(f"Salvo em: {caminho_final}")
+    print(f"PROCESS COMPLETED!")
+    print(f"Unique Online Channels: {len(unique_channels)}")
+    print(f"Saved to: {final_path}")
     print("="*40)
 
 if __name__ == "__main__":
-    validar_iptv()
+    validate_iptv()
