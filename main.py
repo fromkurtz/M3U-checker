@@ -1,20 +1,32 @@
 import requests
 import os
 import glob
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- CONFIGURATIONS ---
-# Use 'r' before quotes on Windows (e.g., r'C:\Users\Name\Desktop\Playlists')
 SOURCE_FOLDER = r'C:\Path\To\Your\Lists' 
 OUTPUT_FILE = 'final_online_list.m3u8'
 TIMEOUT = 5 
+MAX_WORKERS = 100  # Number of simultaneous checks. Increase for more speed.
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
 
-def validate_iptv():
-    unique_channels = {} # Dictionary to avoid duplicates (Name + URL)
+def check_link(name, url):
+    """Function to check a single link status."""
+    try:
+        # We use a short timeout to keep it fast
+        response = requests.head(url, timeout=TIMEOUT, headers=HEADERS, allow_redirects=True)
+        if response.status_code == 200:
+            return (name, url, True)
+    except:
+        pass
+    return (name, url, False)
+
+def validate_iptv_fast():
+    unique_channels = {} 
+    all_tasks = []
     
-    # Define the pattern to search for .m3u and .m3u8 files
     search_pattern = os.path.join(SOURCE_FOLDER, "*.m3u*")
     m3u_files = glob.glob(search_pattern)
     
@@ -22,64 +34,63 @@ def validate_iptv():
         print(f"No files found in: {SOURCE_FOLDER}")
         return
 
-    print(f"--- Found {len(m3u_files)} files to process ---")
+    # 1. Parsing files first (Memory efficient)
+    print("--- Parsing files and removing local duplicates ---")
+    links_to_check = {} # URL: Name
 
     for file_path in m3u_files:
-        # Ignore the output file if it's in the same folder
-        if OUTPUT_FILE in file_path:
-            continue
-            
-        print(f"\nReading: {os.path.basename(file_path)}")
+        if OUTPUT_FILE in file_path: continue
+        
         try:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                lines = f.readlines()
+                name = ""
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('#EXTINF'):
+                        name = line
+                    elif line.startswith('http'):
+                        # Using URL as key to avoid checking the same link twice globally
+                        if line not in links_to_check:
+                            links_to_check[line] = name
         except Exception as e:
-            print(f"Error reading file: {e}")
-            continue
+            print(f"Error reading {file_path}: {e}")
 
-        metadata_name = ""
-        for line in lines:
-            line = line.strip()
-            
-            # Capture the #EXTINF line (channel name and info)
-            if line.startswith('#EXTINF'):
-                metadata_name = line
-            
-            # Capture the URL line
-            elif line.startswith('http'):
-                url = line
-                # Create a unique key based on Name + URL
-                # This prevents duplicate entries even if they come from different files
-                duplicate_key = f"{metadata_name}_{url}"
-                
-                if duplicate_key not in unique_channels:
-                    try:
-                        # Perform a HEAD request to check status without downloading the stream
-                        response = requests.head(url, timeout=TIMEOUT, headers=HEADERS, allow_redirects=True)
-                        
-                        if response.status_code == 200:
-                            print(f"  [ON]  {url}")
-                            unique_channels[duplicate_key] = (metadata_name, url)
-                        else:
-                            print(f"  [OFF] Status {response.status_code}")
-                            
-                    except Exception:
-                        print(f"  [OFF] Timeout/Error")
-                else:
-                    print(f"  [SKIP] Channel/Link already processed")
+    total_links = len(links_to_check)
+    print(f"Total unique links to verify: {total_links}")
 
-    # Save the consolidated results
+    # 2. Multithreaded Verification
+    print(f"--- Starting verification with {MAX_WORKERS} workers ---")
+    online_count = 0
+    processed_count = 0
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        # Schedule the check for each unique link
+        future_to_url = {executor.submit(check_link, name, url): url for url, name in links_to_check.items()}
+        
+        for future in as_completed(future_to_url):
+            processed_count += 1
+            name, url, is_online = future.result()
+            
+            if is_online:
+                unique_channels[url] = name
+                online_count += 1
+            
+            # Progress update every 100 links
+            if processed_count % 100 == 0:
+                print(f"Progress: {processed_count}/{total_links} | Online: {online_count}", end='\r')
+
+    # 3. Saving Results
     final_path = os.path.join(SOURCE_FOLDER, OUTPUT_FILE)
     with open(final_path, 'w', encoding='utf-8') as f:
         f.write("#EXTM3U\n")
-        for name, url in unique_channels.values():
+        for url, name in unique_channels.items():
             f.write(f"{name}\n{url}\n")
     
     print(f"\n" + "="*40)
-    print(f"PROCESS COMPLETED!")
+    print(f"FINISHED!")
     print(f"Unique Online Channels: {len(unique_channels)}")
     print(f"Saved to: {final_path}")
     print("="*40)
 
 if __name__ == "__main__":
-    validate_iptv()
+    validate_iptv_fast()
